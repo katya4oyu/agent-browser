@@ -116,6 +116,15 @@ pub fn list_all_devices() -> Result<Vec<IosDevice>, String> {
     Ok(all)
 }
 
+fn matches_name_or_udid(device: &IosDevice, selector: &str) -> bool {
+    device.udid == selector
+        || device.name == selector
+        || device
+            .name
+            .to_lowercase()
+            .contains(&selector.to_lowercase())
+}
+
 pub fn boot_simulator(udid: &str) -> Result<(), String> {
     let output = Command::new("xcrun")
         .args(["simctl", "boot", udid])
@@ -148,7 +157,7 @@ pub fn shutdown_simulator(udid: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn select_device(device_name: Option<&str>, udid: Option<&str>) -> Result<IosDevice, String> {
+pub fn select_device(name_or_udid: Option<&str>, udid: Option<&str>) -> Result<IosDevice, String> {
     if let Some(u) = udid {
         let devices = list_all_devices()?;
         return devices
@@ -157,12 +166,12 @@ pub fn select_device(device_name: Option<&str>, udid: Option<&str>) -> Result<Io
             .ok_or_else(|| format!("Device with UDID '{}' not found", u));
     }
 
-    if let Some(name) = device_name {
+    if let Some(selector) = name_or_udid {
         let devices = list_all_devices()?;
         return devices
             .into_iter()
-            .find(|d| d.name.to_lowercase().contains(&name.to_lowercase()))
-            .ok_or_else(|| format!("Device '{}' not found", name));
+            .find(|d| matches_name_or_udid(d, selector))
+            .ok_or_else(|| format!("Device '{}' not found", selector));
     }
 
     // Default: prefer most recent iPhone, prefer Pro
@@ -231,5 +240,20 @@ mod tests {
         }];
         let json = to_device_json(&devices);
         assert!(json.get("devices").unwrap().as_array().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn name_or_udid_selector_accepts_name_or_exact_udid() {
+        let device = IosDevice {
+            name: "iPhone 15 Pro".to_string(),
+            udid: "ABC-123".to_string(),
+            state: "Shutdown".to_string(),
+            runtime: "iOS-17".to_string(),
+            is_real: false,
+        };
+
+        assert!(matches_name_or_udid(&device, "iPhone 15"));
+        assert!(matches_name_or_udid(&device, "ABC-123"));
+        assert!(!matches_name_or_udid(&device, "DEF-456"));
     }
 }
