@@ -4590,7 +4590,8 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
 
 fn ios_selectors_from_command(cmd: &Value) -> (Option<String>, Option<String>) {
     let name_or_udid = cmd
-        .get("deviceName")
+        .get("deviceNameOrUdid")
+        .or_else(|| cmd.get("deviceName"))
         .and_then(|v| v.as_str())
         .map(String::from)
         .or_else(|| env::var("AGENT_BROWSER_IOS_DEVICE").ok());
@@ -11653,11 +11654,12 @@ mod tests {
         guard.set("AGENT_BROWSER_IOS_UDID", "env-udid");
 
         let selectors = ios_selectors_from_command(&json!({
-            "deviceName": "cmd-name",
+            "deviceNameOrUdid": "cmd-name-or-udid",
+            "deviceName": "legacy-name",
             "udid": "cmd-udid"
         }));
 
-        assert_eq!(selectors.0.as_deref(), Some("cmd-name"));
+        assert_eq!(selectors.0.as_deref(), Some("cmd-name-or-udid"));
         assert_eq!(selectors.1.as_deref(), Some("cmd-udid"));
     }
 
