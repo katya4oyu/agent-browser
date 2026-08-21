@@ -4588,23 +4588,31 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     Ok(json!({ "launched": true, "relaunchedBrowser": had_browser_before_launch }))
 }
 
-fn ios_selectors_from_command(cmd: &Value) -> (Option<String>, Option<String>) {
-    let name_or_udid = cmd
+fn resolve_ios_selectors(cmd: &Value) -> (Option<String>, Option<String>) {
+    let command_name_or_udid = cmd
         .get("deviceNameOrUdid")
         .or_else(|| cmd.get("deviceName"))
         .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| env::var("AGENT_BROWSER_IOS_DEVICE").ok());
-    let udid = cmd
-        .get("udid")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| env::var("AGENT_BROWSER_IOS_UDID").ok());
-    (name_or_udid, udid)
+        .map(String::from);
+    let command_udid = cmd.get("udid").and_then(|v| v.as_str()).map(String::from);
+
+    if command_udid.is_some() {
+        return (command_name_or_udid, command_udid);
+    }
+
+    if command_name_or_udid.is_some() {
+        return (command_name_or_udid, None);
+    }
+
+    if let Ok(udid) = env::var("AGENT_BROWSER_IOS_UDID") {
+        return (None, Some(udid));
+    }
+
+    (env::var("AGENT_BROWSER_IOS_DEVICE").ok(), None)
 }
 
 async fn launch_ios(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let (name_or_udid, device_udid) = ios_selectors_from_command(cmd);
+    let (name_or_udid, device_udid) = resolve_ios_selectors(cmd);
     let platform_version = cmd.get("platformVersion").and_then(|v| v.as_str());
 
     // Select device (or use default)
@@ -11653,7 +11661,7 @@ mod tests {
         guard.set("AGENT_BROWSER_IOS_DEVICE", "env-name");
         guard.set("AGENT_BROWSER_IOS_UDID", "env-udid");
 
-        let selectors = ios_selectors_from_command(&json!({
+        let selectors = resolve_ios_selectors(&json!({
             "deviceNameOrUdid": "cmd-name-or-udid",
             "deviceName": "legacy-name",
             "udid": "cmd-udid"
@@ -11664,15 +11672,39 @@ mod tests {
     }
 
     #[test]
+    fn ios_command_selector_overrides_ambient_udid() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_IOS_UDID"]);
+        guard.set("AGENT_BROWSER_IOS_UDID", "env-udid");
+
+        let selectors = resolve_ios_selectors(&json!({
+            "deviceNameOrUdid": "command-device"
+        }));
+
+        assert_eq!(selectors.0.as_deref(), Some("command-device"));
+        assert_eq!(selectors.1, None);
+    }
+
+    #[test]
     fn ios_selector_falls_back_to_environment() {
         let guard = EnvGuard::new(&["AGENT_BROWSER_IOS_DEVICE", "AGENT_BROWSER_IOS_UDID"]);
         guard.set("AGENT_BROWSER_IOS_DEVICE", "env-name-or-udid");
         guard.set("AGENT_BROWSER_IOS_UDID", "env-udid");
 
-        let selectors = ios_selectors_from_command(&json!({}));
+        let selectors = resolve_ios_selectors(&json!({}));
 
-        assert_eq!(selectors.0.as_deref(), Some("env-name-or-udid"));
+        assert_eq!(selectors.0, None);
         assert_eq!(selectors.1.as_deref(), Some("env-udid"));
+    }
+
+    #[test]
+    fn ios_selector_defaults_when_no_selector_is_provided() {
+        let guard = EnvGuard::new(&["AGENT_BROWSER_IOS_DEVICE", "AGENT_BROWSER_IOS_UDID"]);
+        guard.remove("AGENT_BROWSER_IOS_DEVICE");
+        guard.remove("AGENT_BROWSER_IOS_UDID");
+
+        let selectors = resolve_ios_selectors(&json!({}));
+
+        assert_eq!(selectors, (None, None));
     }
 
     /// A binding-recovery failure must tear the connection down: the attach
